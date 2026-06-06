@@ -529,6 +529,7 @@ class Core:
         self.left_chord_notes = [False] * 127
         self.chord_notes = [False] * 127
         self.note_set = set()
+        self.vis_board = [[0 for x in range(self.max_width)] for y in range(self.board_h)]
 
     def midi_write(self, dev, msg, ts=0):
         """Write MIDI message `msg` to device `dev`"""
@@ -1074,9 +1075,9 @@ class Core:
         ch = data[0] & 0x0F
         msg = data[0] >> 4
         if msg == 9:  # note on
-            self.mark(data[1] + self.vis_octave * 12, 1, True)
+            self.mark(data[1] + self.vis_octave * 12, 1, True, vis=True)
         elif msg == 8:  # note off
-            self.mark(data[1] + self.vis_octave * 12, 0, True)
+            self.mark(data[1] + self.vis_octave * 12, 0, True, vis=True)
         # else:
             # print(msg, data)
 
@@ -1807,6 +1808,7 @@ class Core:
         w = self.max_width
         h = self.board_h
         self.board = [[0 for x in range(w)] for y in range(h)]
+        self.vis_board = [[0 for x in range(w)] for y in range(h)]
         self.mark_lights = [[False for x in range(w)] for y in range(h)]
         self.launchpad_state = [[None for x in range(8)] for y in range(8)]
 
@@ -2010,7 +2012,7 @@ class Core:
                 self.reset_light(x, y)
         self.dirty = True
 
-    def mark(self, midinote, state, use_lights=False, only_row=None):
+    def mark(self, midinote, state, use_lights=False, only_row=None, vis=False):
         if only_row is not None:
             only_row = self.board_h - only_row - 1 - self.flipped  # flip
             try:
@@ -2022,6 +2024,7 @@ class Core:
         else:
             rows = self.board
             y = 0
+        target_board = self.vis_board if vis else self.board
         for row in rows:
             x = 0
             for x in range(len(row)):
@@ -2031,8 +2034,8 @@ class Core:
                     octave = self.get_octave(x, y)
                     if octave == midinote // 12:
                         # print(octave)
-                        self.board[y + self.flipped][x + self.position.x] = state
-                        if use_lights:
+                        target_board[y + self.flipped][x + self.position.x] = state
+                        if use_lights and not vis:
                             if state:
                                 self.set_light(x, y, self.options.mark_light, mark=True)
                             else:
@@ -2402,38 +2405,49 @@ class Core:
                     pygame.draw.rect(
                         self.screen.surface, vec3(24), rect, width=2, border_radius=8
                     )
-                if cell:
+                vis_cell = self.vis_board[y][x] if x < len(self.vis_board[y]) else 0
+
+                if cell or vis_cell:
                     circ = ivec2(
                         int(x * sz + b / 2 + sz / 2),
                         int(self.menu_sz + y * sz + b / 2 + sz / 2),
                     )
+                    if vis_cell:
+                        circle_col = ivec3(0, 100, 255)
+                        circle_inner_col = ivec3(0, 80, 200)
+                        shadow_col = ivec3(0, 0, 0)
+                    else:
+                        circle_col = ivec3(255, 0, 0)
+                        circle_inner_col = ivec3(200, 0, 0)
+                        shadow_col = ivec3(0, 0, 0)
+
                     pygame.gfxdraw.aacircle(
                         self.screen.surface,
                         circ.x + 1,
                         circ.y - 1,
                         rad,
-                        ivec3(255, 0, 0),
+                        circle_col,
                     )
                     pygame.gfxdraw.filled_circle(
                         self.screen.surface,
                         circ.x + 1,
                         circ.y - 1,
                         rad,
-                        ivec3(255, 0, 0),
+                        circle_col,
                     )
 
                     pygame.gfxdraw.aacircle(
-                        self.screen.surface, circ.x - 1, circ.y + 1, rad, ivec3(0)
+                        self.screen.surface, circ.x - 1, circ.y + 1, rad, shadow_col
                     )
                     pygame.gfxdraw.filled_circle(
-                        self.screen.surface, circ.x - 1, circ.y + 1, rad, ivec3(0)
+                        self.screen.surface, circ.x - 1, circ.y + 1, rad, shadow_col
                     )
 
                     pygame.gfxdraw.filled_circle(
-                        self.screen.surface, circ.x, circ.y, rad, lit_col
+                        self.screen.surface, circ.x, circ.y, rad, circle_col
                     )
                     pygame.gfxdraw.aacircle(
-                        self.screen.surface, circ.x, circ.y, rad, lit_col
+                        self.screen.surface, circ.x, circ.y, rad, circle_col
                     )
 
                     pygame.gfxdraw.filled_circle(
@@ -2441,14 +2455,14 @@ class Core:
                         circ.x,
                         circ.y,
                         int(rad * 0.9),
-                        ivec3(200, 0, 0),
+                        circle_inner_col,
                     )
                     pygame.gfxdraw.aacircle(
                         self.screen.surface,
                         circ.x,
                         circ.y,
                         int(rad * 0.9),
-                        ivec3(200, 0, 0),
+                        circle_inner_col,
                     )
 
                 text = self.font.render(note, True, (0, 0, 0))
