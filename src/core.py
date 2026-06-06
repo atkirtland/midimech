@@ -2415,13 +2415,17 @@ class Core:
                         int(x * sz + b / 2 + sz / 2),
                         int(self.menu_sz + y * sz + b / 2 + sz / 2),
                     )
-                    if vis_cell:
-                        circle_col = ivec3(0, 100, 255)
-                        circle_inner_col = ivec3(0, 80, 200)
+                    if cell and vis_cell:  # Both are active (Purple)
+                        circle_col = ivec3(150, 0, 255)
+                        circle_inner_col = ivec3(100, 0, 200)
                         shadow_col = ivec3(0, 0, 0)
-                    else:
+                    elif cell:  # Local input only (Red)
                         circle_col = ivec3(255, 0, 0)
                         circle_inner_col = ivec3(200, 0, 0)
+                        shadow_col = ivec3(0, 0, 0)
+                    elif vis_cell:  # Visualizer only (Blue)
+                        circle_col = ivec3(0, 100, 255)
+                        circle_inner_col = ivec3(0, 80, 200)
                         shadow_col = ivec3(0, 0, 0)
 
                     pygame.gfxdraw.aacircle(
