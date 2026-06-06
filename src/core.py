@@ -2040,6 +2040,9 @@ class Core:
                                 self.set_light(x, y, self.options.mark_light, mark=True)
                             else:
                                 self.reset_light(x, y)
+                        elif use_lights and vis:
+                            # Trigger the unified visualizer light logic
+                            self.set_vis_light(x, y, state)
             y += 1
         self.dirty = True
 
@@ -2625,3 +2628,24 @@ class Core:
             out.abort()
         self.out = []
 
+
+    def set_vis_light(self, x, y, state):
+        """Set visualizer light to white on all connected devices, or restore to normal."""
+        if state:
+            # 1. LinnStrument (Color 8 is White)
+            self.ls_color(x, y, 8)
+            
+            # 2. Launchpad (Index 3 is White)
+            if 0 <= x < 8 and 0 <= y < 8:
+                for lp in self.launchpads:
+                    if self.options.launchpad_colors:
+                        lp.out.LedCtrlXYByCode(x, y+1, 3)
+                    else:
+                        lp.out.LedCtrlXY(x, y+1, 63, 63, 63)
+        else:
+            # Restore to marked state if the user is physically holding the pad
+            if self.mark_lights[y][x]:
+                self.set_light(x, y, self.options.mark_light, mark=True)
+            # Otherwise, reset the light back to the standard scale color
+            else:
+                self.reset_light(x, y)
