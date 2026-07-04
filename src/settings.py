@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 @dataclass
 class Settings:
@@ -82,6 +83,7 @@ class Settings:
     # Right now these are calculated from size, don't use
     width: int = 16
     height: int = 8
+    split_point: Optional[int] = None
 
     # launchpad viberato method (off, mod, or pitch)
     vibrato: str = 'mod'

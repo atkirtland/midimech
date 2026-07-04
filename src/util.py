@@ -3,16 +3,6 @@ from dataclasses import dataclass
 import glm
 from src.constants import *
 
-# suppress pygame messages to keep console output clean
-with open(os.devnull, "w") as devnull:
-    stdout = sys.stdout
-    sys.stdout = devnull
-    import pygame, pygame.midi, pygame.gfxdraw
-
-    sys.stdout = stdout
-import pygame_gui
-
-# import mido
 from collections import OrderedDict
 from configparser import ConfigParser
 
@@ -46,31 +36,6 @@ def sign(val):
 
 def clamp(low, high, val):
     return max(low, min(val, high))
-
-
-class Object:
-    def __init__(self, **kwargs):
-        self.game = kwargs.get("game", None)
-        self.attached = False
-        if self.game:
-            self.game.world.attach(self)
-
-        self.pos = glm.vec2(*kwargs.get("pos", (0.0, 0.0)))
-        self.vel = glm.vec2(*kwargs.get("vel", (0.0, 0.0)))
-        self.sz = glm.vec2(*kwargs.get("sz", (0.0, 0.0)))
-        self.surface = kwargs.get("surface", None)
-
-
-class Screen(Object):
-    def __init__(self, core, screen):
-        self.core = core
-        self.pos = glm.vec2(0.0, 0.0)
-        self.sz = glm.vec2(core.screen_w, core.screen_h)
-        self.surface = pygame.Surface(core.screen_sz).convert()
-        self.screen = screen
-
-    def render(self):
-        self.screen.blit(self.surface, (0, 0))
 
 
 def nothing():

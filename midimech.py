@@ -1,14 +1,7 @@
 #!/usr/bin/python3
-# from tkinter import *
-from collections import OrderedDict
-from configparser import ConfigParser
-import os, sys, glm, copy, binascii, struct, math, traceback, signal
-import rtmidi2
-from dataclasses import dataclass
-from glm import ivec2, vec2, ivec3, vec3
-import time
+import os, sys, traceback
 
-from src.core import Core
+from src.util import error
 
 # suppress pygame messages to keep console clean
 with open(os.devnull, "w") as devnull:
@@ -17,41 +10,35 @@ with open(os.devnull, "w") as devnull:
     import pygame, pygame.midi, pygame.gfxdraw
 
     sys.stdout = stdout
-import pygame_gui
 
-# pymsgbox crashes on Mac, so we can't use this right now
-# try:
-#     import pymsgbox
-# except ImportError:
-#     print("The project dependencies have changed! Run the requirements setup command again!")
-#     sys.exit(1)
-
-try:
-    import launchpad_py as launchpad
-except ImportError:
-    try:
-        import launchpad
-    except ImportError:
-        error("The project dependencies have changed! Run the requirements setup command again!")
-
-try:
-    import yaml
-except ImportError:
-    error("The project dependencies have changed! Run the requirements setup command again!")
-
-# import mido
-
-try:
-    import musicpy as mp
-except ImportError:
-    error("The project dependencies have changed! Run the requirements setup command again!")
+from src.settings_loader import load_settings
+from src.backends.desktop import open_launchpads, open_midi_ports
+from src.core import Core
+from src.frontends.pygame_frontend import PygameFrontend
 
 
 def main():
     core = None
     try:
-        core = Core()
-        core()
+        options, scale_db = load_settings()
+
+        io = open_midi_ports(options)
+        if not io.midi_out:
+            error(
+                "No MIDI output device detected.  Install a midi loopback device and name it 'midimech'!"
+            )
+        io.control_surfaces = open_launchpads(options)
+
+        core = Core(options, scale_db, io)
+
+        if io.midi_in:
+            io.midi_in.callback = core.cb_midi_in
+        if io.visualizer:
+            io.visualizer.callback = core.cb_visualizer
+        if io.foot_in:
+            io.foot_in.callback = core.cb_foot
+
+        PygameFrontend(core).run()
     except SystemExit:
         pass
     except:
@@ -60,7 +47,6 @@ def main():
     pygame.midi.quit()
     pygame.display.quit()
     os._exit(0)
-    # pygame.quit()
 
 
 if __name__ == "__main__":

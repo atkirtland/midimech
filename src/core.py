@@ -1,45 +1,20 @@
 #!/usr/bin/python3
 # from tkinter import *
 from collections import OrderedDict
-from configparser import ConfigParser
 import os, sys, glm, copy, binascii, struct, math, traceback, signal
-import rtmidi2
 from dataclasses import dataclass
 from glm import ivec2, vec2, ivec3, vec3
 import time
 
 from src.util import *
 from src.constants import *
-from src.settings import Settings, DEFAULT_OPTIONS
 from src.note import Note
 from src.device import Device, DeviceSettings
 from src.launchpad import Launchpad
 from src.articulation import Articulation
+from src.io_interfaces import IOContext, MidiIn, MidiOut
+from typing import Optional
 # from src.gamepad import Gamepad
-
-with open(os.devnull, "w") as devnull:
-    # suppress pygame messages (to keep console output clean)
-    stdout = sys.stdout
-    sys.stdout = devnull
-    import pygame, pygame.midi, pygame.gfxdraw
-
-    sys.stdout = stdout
-import pygame_gui
-
-try:
-    import launchpad_py as launchpad
-except ImportError:
-    try:
-        import launchpad
-    except ImportError:
-        error("The project dependencies have changed! Run the requirements setup command again!")
-
-try:
-    import yaml
-except ImportError:
-    error("The project dependencies have changed! Run the requirements setup command again!")
-
-# import mido
 
 try:
     import musicpy as mp
@@ -393,14 +368,13 @@ class Core:
         x, y = int(x), int(y)
         return (x, y, vel)
 
-    def mouse_press(self, x, y, state=True, hold=False, hover=False):
+    def mouse_press(self, x, y, state=True, hold=False, hover=False, button_held=True):
         """Do mouse press at x, y"""
         if y < 0:
             return
 
         if hover:
-            btn = pygame.mouse.get_pressed(3)[0]
-            if not btn:
+            if not button_held:
                 return
 
         # if we're not intending to hold the note, we release the previous primary note
@@ -469,9 +443,9 @@ class Core:
             
             self.mouse_midi = -1
 
-    def mouse_hover(self, x, y):
+    def mouse_hover(self, x, y, button_held=True):
         """Do mouse hover at x, y"""
-        self.mouse_press(x, y, hover=True)
+        self.mouse_press(x, y, hover=True, button_held=button_held)
 
     # Given an x,y position, find the octave
     #  (used to initialize octaves 2D array)
@@ -1247,24 +1221,16 @@ class Core:
         """Signal handler"""
         self.quit()
 
-    def __init__(self):
+    def __init__(self, options, scale_db, io: IOContext):
         Core.CORE = self
-        
+
         signal.signal(signal.SIGINT, self.sig)
         signal.signal(signal.SIGTERM, self.sig)
-         
-        self.cfg = ConfigParser(allow_no_value=True)
-        self.cfg.read("settings.ini")
-        try:
-            opts = self.cfg["general"]
-        except KeyError:
-            opts = None
 
-        with open("scales.yaml", 'r') as stream:
-            try:
-                self.scale_db = yaml.safe_load(stream)
-            except yaml.YAMLError as exc:
-                error('Cannot load scales.yaml')
+        self.options = options
+        self.scale_db = scale_db
+        self.split_point = options.split_point
+        self.split_state = options.split
 
         dups = {}
         scale_count = 0
@@ -1284,195 +1250,13 @@ class Core:
                         print('Duplicate scale: ', dups[mode_notes], ' and ', name)
                         break
                     else:
-                        # print(mode_notes, name)
                         dups[mode_notes] = name
             else:
                 scale_count += 1
 
-        # print('Scale Count:', scale_count)
-
-        self.options = Settings()
-
-        self.options.column_offset = get_option(opts, "column_offset", DEFAULT_OPTIONS.column_offset)
-        self.options.row_offset = get_option(opts, "row_offset", DEFAULT_OPTIONS.row_offset)
-        self.options.base_offset = get_option(opts, "base_offset", DEFAULT_OPTIONS.base_offset)
-
-        self.options.colors = get_option(opts, "colors", DEFAULT_OPTIONS.colors)
-        self.options.colors = list(self.options.colors.split(","))
-        self.options.colors = list(map(lambda x: glm.ivec3(get_color(x)), self.options.colors))
-
-        self.options.launchpad_colors = get_option(opts, "launchpad_colors", DEFAULT_OPTIONS.launchpad_colors)
-        if self.options.launchpad_colors:
-            self.options.launchpad_colors = list(self.options.launchpad_colors.split(","))
-            self.options.launchpad_colors = list(int(x) for x in self.options.launchpad_colors)
-
-        self.options.split_colors = get_option(opts, "split_colors", DEFAULT_OPTIONS.split_colors)
-        self.options.split_colors = list(self.options.split_colors.split(","))
-        self.options.split_colors = list(map(lambda x: glm.ivec3(get_color(x)), self.options.split_colors))
-
-        # LIGHT = ivec3(127)
-        self.options.lights = get_option(opts, "lights", DEFAULT_OPTIONS.lights)
-        if self.options.lights:
-            self.options.lights = list(
-                map(lambda x: int(x), self.options.lights.split(","))
-            )
-        self.options.lights = list(map(lambda x: 3 if x==7 else x, self.options.lights))
-
-        self.options.split_lights = get_option(
-            opts, "split_lights", DEFAULT_OPTIONS.split_lights
-        )
-        if self.options.split_lights:
-            self.options.split_lights = list(
-                map(lambda x: int(x), self.options.split_lights.split(","))
-            )
-        self.options.split_lights = list(map(lambda x: 5 if x==7 else x, self.options.split_lights))
-
-        if len(self.options.colors) != 12:
-            error("Invalid color configuration. Make sure you have 12 colors under the colors option or remove it.")
-        if len(self.options.split_colors) != 12:
-            error("Invalid split color configuration. Make sure you have 12 colors under the split_colors option or remove it.")
-        if len(self.options.lights) != 12:
-            error("Invalid light color configuration. Make sure you have 12 light colors under the lights option or remove it.")
-        if len(self.options.split_lights) != 12:
-            error("Invalid light color configuration for split. Make sure you have 12 light colors under the split_lights option or remove it.")
-
-        self.options.one_channel = get_option(
-            opts, "one_channel", DEFAULT_OPTIONS.one_channel
-        )
-        self.options.bend_range = get_option(
-            opts, "bend_range", DEFAULT_OPTIONS.bend_range
-        )
-
-        if "--lite" in sys.argv:
-            self.options.lite = True
-        else:
-            self.options.lite = get_option(
-                opts, "lite", DEFAULT_OPTIONS.lite
-            )
-
-        # bend the velocity curve, examples: 0.5=sqrt, 1.0=default, 2.0=squared
-        self.options.velocity_curve = get_option(
-            opts, "velocity_curve", DEFAULT_OPTIONS.velocity_curve
-        )
-
-        # these settings are only used with the foot controller
-        self.options.velocity_curve_low = get_option(
-            opts, "velocity_curve_low", DEFAULT_OPTIONS.velocity_curve_low
-        )  # loudest (!)
-        self.options.velocity_curve_high = get_option(
-            opts, "velocity_curve_high", DEFAULT_OPTIONS.velocity_curve_high
-        )  # quietest (!)
-
-        if self.options.velocity_curve < EPSILON:  # if its near zero, set default
-            self.options.velocity_curve = 1.0  # default
-
-        self.options.mark_light = get_option(
-            opts, "mark_light", DEFAULT_OPTIONS.mark_light
-        )
-        self.options.mark_color = get_option(
-            opts, "mark_color", DEFAULT_OPTIONS.mark_color
-        )
-        self.options.mark_color = glm.ivec3(get_color(self.options.mark_color))
-
-        self.options.min_velocity = get_option(
-            opts, "min_velocity", DEFAULT_OPTIONS.min_velocity
-        )
-        self.options.max_velocity = get_option(
-            opts, "max_velocity", DEFAULT_OPTIONS.max_velocity
-        )
-        self.options.show_lowest_note = get_option(
-            opts, "show_lowest_note", DEFAULT_OPTIONS.show_lowest_note
-        )
-
-        self.options.y_bend = get_option(
-            opts, "y_bend", DEFAULT_OPTIONS.y_bend
-        )
-
-        # self.options.mpe = get_option(
-        #     opts, "mpe", DEFAULT_OPTIONS.mpe
-        # ) or get_option(
-        #     opts, "no_overlap", DEFAULT_OPTIONS.mpe
-        # )
-        self.options.vibrato = get_option(opts, "vibrato", DEFAULT_OPTIONS.vibrato)
-        self.options.midi_out = get_option(opts, "midi_out", DEFAULT_OPTIONS.midi_out)
-        self.options.split_out = get_option(
-            opts, "split_out", DEFAULT_OPTIONS.split_out
-        )
-        self.options.fps = get_option(opts, "fps", DEFAULT_OPTIONS.fps)
-        # self.options.fps = get_option(opts, "jazz", DEFAULT_OPTIONS.jazz)
-        self.options.chord_analyzer = get_option(opts, "chord_analyzer", DEFAULT_OPTIONS.chord_analyzer)
-        self.split_state = self.options.split = get_option(
-            opts, "split", DEFAULT_OPTIONS.split
-        )
-        self.options.foot_in = get_option(opts, "foot_in", DEFAULT_OPTIONS.foot_in)
-        # self.options.sustain = get_option(
-        #     opts, "sustain", DEFAULT_OPTIONS.sustain
-        # )
-
-        # which split the sustain affects
-        self.options.sustain_split = get_option(
-            opts, "sustain_split", "both"
-        )  # left, right, both
-        if self.options.sustain_split not in ("left", "right", "both"):
-            print("Invalid sustain split value. Settings: left, right, both.")
-            sys.exit(1)
-
-        self.options.octave_separation = get_option(opts, "octave_separation", DEFAULT_OPTIONS.octave_separation)
-        self.options.octave_split = get_option(opts, "octave_split", DEFAULT_OPTIONS.octave_split)
-
-        hardware_split = False
-        self.options.size = get_option(opts, "size", DEFAULT_OPTIONS.size)
-        if self.options.size == 128:
-            self.options.width = 16
-            self.split_point = None
-        elif self.options.size == 200:
-            self.options.width = 25
-            self.split_point = 11
-            hardware_split = True
-        elif self.options.size < 0: # test hardware split
-            self.options.width = 16
-            self.split_point = -self.options.size
-            hardware_split = True
-
-        # Note: The default below is what is determined by size above.
-        # Overriding hardware_split is only useful for 128 user testing 200 behavior
-        self.options.hardware_split = get_option(opts, "hardware_split", hardware_split)
-
-        self.options.launchpad = get_option(opts, 'launchpad', True)
-        self.options.launchpad_channel = get_option(opts, 'launchpad_channel', 1)
-        self.options.experimental = get_option(opts, 'experimental', False)
-        self.options.debug = get_option(opts, 'debug', False)
-        self.options.stabilizer = get_option(opts, 'stabilizer', False)
-        self.options.stable_left = get_option(opts, 'stable_left', False)
-        self.options.stable_right = get_option(opts, 'stable_right', False)
-
-        # simulator keys
-        self.keys = {}
-        i = 0
-        for key in "1234567890-=":
-            self.keys[ord(key)] = 62 + i
-            i += 2
-        self.keys[pygame.K_BACKSPACE] = 62 + i
-        i = 0
-        for key in "qwertyuiop[]\\":
-            self.keys[ord(key)] = 57 + i
-            i += 2
-        i = 0
-        for key in "asdfghjkl;'":
-            self.keys[ord(key)] = 52 + i
-            i += 2
-        self.keys[pygame.K_RETURN] = 52 + i
-        i = 0
-        for key in "zxcvbnm,./":
-            self.keys[ord(key)] = 47 + i
-            i += 2
-        self.keys[pygame.K_RSHIFT] = 47 + i
-
-        # self.panel = CHORD_ANALYZER
         self.panel_sz = 32
         self.status_sz = 32
-        # self.status_sz = 32 if self.options.experimental else 0
-        self.menu_sz = 32 #96  # full
+        self.menu_sz = 32
         self.max_width = 25  # MAX WIDTH OF LINNSTRUMENT
         self.board_h = 8
         self.scale = vec2(64.0)
@@ -1492,7 +1276,6 @@ class Core:
             -2
         )  # this is for both the visualizer and the keyboard simulator marking atm
         self.octave_base = -2
-        # self.position.x = 0
         self.position = glm.ivec2(0, 0) # only x is used right now
         self.rotated = False  # transpose -3 whole steps
         self.flipped = False  # vertically shift +1
@@ -1514,7 +1297,7 @@ class Core:
         self.scale_notes = self.scale_db[self.scale_index]['notes']
         self.scale_root = 0
         self.tonic = 0
-        
+
         self.program = 0
         self.bank = 0
 
@@ -1522,288 +1305,27 @@ class Core:
 
         self.init_board()
 
-        # load midi file from command line (playiung it is not yet impl)
-        # self.midi_in_fn = None
-        # self.midifile = None
-        # if len(sys.argv) > 1:
-        #     self.midi_in_fn = sys.argv[1]
-        #     if self.midi_in_fn.to_lower().endswith('.mid'):
-        #         self.midifile = mido.MidiFile(midi_fn)
-
-        # self.root = Tk()
-        # self.menubar = Menu(self.root)
-        # self.filemenu = Menu(self.menubar, tearoff=0)
-        # self.filemenu.add_command(label="Open", command=nothing)
-        # self.root.config(menu=self.menubar)
-        # self.embed = Frame(self.root, width=self.screen_w, height=self.screen_h)
-        # self.embed.pack()
-        # os.environ['SDL_WINDOWID'] = str(self.embed.winfo_id())
-        # self.root.update()
-        # self.menubar.add_cascade(label="File", menu=self.filemenu)
-        # self.root.protocol("WM_DELETE_WINDOW", self.quit)
-        pygame.init()
-        pygame.display.set_caption(TITLE)
-        self.icon = pygame.image.load('icon.png')
-        pygame.display.set_icon(self.icon)
-        # if FOCUS:
-        #     pygame.mouse.set_visible(0)
-        #     pygame.event.set_grab(True)
-        if self.options.lite:
-            self.screen = Screen(
-                self, pygame.display.set_mode((256, 256), pygame.DOUBLEBUF)
-            )
-        else:
-            self.screen = Screen(
-                self, pygame.display.set_mode(self.screen_sz, pygame.DOUBLEBUF)
-            )
-
-        bs = ivec2(self.button_sz, self.panel_sz)  # // 2 double panel
-        self.gui = pygame_gui.UIManager(self.screen_sz)
-        y = 0
-        self.btn_octave_down = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((2, y), bs), text="<OCT", manager=self.gui
-        )
-        self.btn_octave_up = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x + 2, y), bs), text="OCT>", manager=self.gui
-        )
-        self.btn_transpose_down = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 2 + 2, y), (bs.x, bs.y)),
-            text='<TR',
-            manager=self.gui
-        )
-        self.btn_transpose_up = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 3 + 2, y), (bs.x, bs.y)),
-            text='TR>',
-            manager=self.gui
-        )
-        self.btn_move_left = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 4 + 2, y), bs),
-            text="<MOV",
-            manager=self.gui,
-        )
-        self.btn_move_right = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 5 + 2, y), bs),
-            text="MOV>",
-            manager=self.gui,
-        )
-        # self.btn_size = pygame_gui.elements.UIButton(
-        #     relative_rect=pygame.Rect((bs.x * 4 + 2, y), bs),
-        #     text="SIZE",
-        #     manager=self.gui,
-        # )
-        self.btn_rotate = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 6 + 2, y), bs),
-            text="ROT",
-            manager=self.gui,
-        )
-        self.btn_flip = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 7 + 2, y), bs),
-            text="FLIP",
-            manager=self.gui,
-        )
-
-        self.btn_split = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 8 + 2, y), (bs.x * 2, bs.y)),
-            text="SPLIT: " + ("ON" if self.split_state else "OFF"),
-            manager=self.gui,
-        )
-
-        self.btn_mpe = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 10 + 2, y), (bs.x * 2, bs.y)),
-            text="MPE: " + ("OFF" if self.options.one_channel else "ON"),
-            manager=self.gui,
-        )
-
-
-        # if self.options.experimental:
-        self.btn_prev_scale = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 12 + 2, y), (bs.x, bs.y)),
-            text='<SCL',
-            manager=self.gui
-        )
-        self.btn_next_scale = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 13 + 2, y), (bs.x, bs.y)),
-            text='SCL>',
-            manager=self.gui
-        )
-
-        self.btn_prev_mode = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 14 + 2, y), (bs.x, bs.y)),
-            text='<MOD',
-            manager=self.gui
-        )
-        self.btn_next_mode = pygame_gui.elements.UIButton(
-            relative_rect=pygame.Rect((bs.x * 15 + 2, y), (bs.x, bs.y)),
-            text='MOD>',
-            manager=self.gui
-        )
-        # self.next_scale = pygame_gui.elements.UIButton(
-        #     relative_rect=pygame.Rect((bs.x * 11 + 2, y), (bs.x, bs.y)),
-        #     text='SCL>',
-        #     manager=self.gui
-        # )
-        # self.scale_label = pygame_gui.elements.UILabel(
-        #     relative_rect=pygame.Rect((bs.x * 12 + 2, y), (bs.x, bs.y)),
-        #     text='Major',
-        #     manager=self.gui
-        # )
-
-        # self.chord_label = pygame_gui.elements.UILabel(
-        #     relative_rect=pygame.Rect((0, self.screen_h - self.status_sz), (self.screen_w, self.status_sz)),
-        #     text='test',
-        #     manager=self.gui
-        # )
-        # self.chord_label.centerx = self.screen_w/2
-
-        # y = bs.y * 2
-        # self.note_buttons = [None] * 12
-        # for n in range(12):
-        #     end_pos = n*2*bs.x//3 + 2*bs.x//3
-        #     self.note_buttons[n] = pygame_gui.elements.UIButton(
-        #         relative_rect=pygame.Rect((2+n*2*bs.x//3, y), (2*bs.x//3, bs.y)),
-        #         text=NOTES[n],
-        #         manager=self.gui
-        #     )
-        
-        # self.slider_velocity = pygame_gui.elements.UIHorizontalSlider (
-        #     relative_rect=pygame.Rect((bs.x*2+2,y+bs.y),(bs.x*2,bs.y)),
-        #     start_value=self.options.velocity_curve,
-        #     value_range=[0,1],
-        #     manager=self.gui
-        # )
-
-        # pygame.midi.init()
-
         self.out = []
-        self.midi_in = None
-        ins = []
-        outs = []
-        # in_devs = [
-        #     'linnstrument',
-        #     'visualizer'
-        # ]
-        # out_devs = [
-        #     'linnstrument',
-        #     self.options.midi_out,
-        #     'midimech'
-        # ]
-        # for i in range(pygame.midi.get_count()):
-        #     info = pygame.midi.get_device_info(i)
-        #     # print(info)
-        #     if info[2]==1:
-        #         ins.append((i,str(info[1])))
-        #     if info[3]==1:
-        #         outs.append((i,str(info[1])))
+        self.midi_out: Optional[MidiOut] = io.midi_out
+        self.split_out: Optional[MidiOut] = io.split_out
+        self.linn_out: Optional[MidiOut] = io.linn_out
+        self.midi_in: Optional[MidiIn] = io.midi_in
+        self.visualizer: Optional[MidiIn] = io.visualizer
+        self.foot_in: Optional[MidiIn] = io.foot_in
 
-        # innames = []
-        # for inx in ins:
-        #     innames += [str(inx[1])]
-        #     print('in: ', inx)
-
-        self.linn_out = None
-        self.midi_out = None
-        self.split_out = None
-
-        outnames = rtmidi2.get_out_ports()
-        for i in range(len(outnames)):
-            name = outnames[i]
-            name_lower = name.lower()
-            # print(name_lower)
-            if "linnstrument" in name_lower:
-                print("Instrument (Out): " + name)
-                self.linn_out = rtmidi2.MidiOut()
-                try:
-                    self.linn_out.open_port(i)
-                except:
-                    print("Unable to open LinnStrument")
-            elif self.options.split_out and self.options.split_out in name_lower:
-                print("Split (Out): " + name)
-                self.split_out = rtmidi2.MidiOut()
-                self.split_out.open_port(i)
-            elif self.options.midi_out in name_lower:
-                print("Loopback (Out): " + name)
-                self.midi_out = rtmidi2.MidiOut()
-                self.midi_out.open_port(i)
-
-        self.midi_in = None
-        self.visualizer = None
-        
-        # self.gamepad = None
-        # if self.options.experimental:
-        #     pygame.joystick.init()
-        #     if pygame.joystick.get_count() > 0:
-        #         self.gamepad = Gamepad(self, 0)
-        #         print('Gamepad initialized')
-
-        innames = rtmidi2.get_in_ports()
-        for i in range(len(innames)):
-            name = innames[i]
-            name_lower = name.lower()
-            if "visualizer" in name_lower:
-                print("Visualizer (In): " + name)
-                self.visualizer = rtmidi2.MidiIn()
-                self.visualizer.callback = self.cb_visualizer
-                self.visualizer.open_port(i)
-            elif "linnstrument" in name_lower:
-                print("Instrument (In): " + name)
-                self.midi_in = rtmidi2.MidiIn()
-                self.midi_in.callback = self.cb_midi_in
-                self.midi_in.open_port(i)
-            elif self.options.foot_in and self.options.foot_in in name_lower:
-                print("Foot Controller (In): " + name)
-                self.foot_in = rtmidi2.MidiIn()
-                self.foot_in.open_port(i)
-                self.foot_in.callback = self.cb_foot
-
-        self.launchpads = []
-        num_launchpads = 0
-        if self.options.launchpad:
-            launchpads = []
-            lp = launchpad.LaunchpadProMk3()
-            if lp.Check(0):
-                if lp.Open(0):
-                    self.launchpads += [Launchpad(self, lp, "promk3", num_launchpads)]
-                    num_launchpads += 1
-            lp = launchpad.LaunchpadPro()
-            if lp.Check(0):
-                if lp.Open(0):
-                    self.launchpads += [Launchpad(self, lp, "pro", num_launchpads)]
-                    num_launchpads += 1
-            lp = launchpad.LaunchpadLPX()
-            if lp.Check(1):
-                lp = launchpad.LaunchpadLPX()
-                if lp.Open(1):
-                    self.launchpads += [Launchpad(self, lp, "lpx", num_launchpads)]
-                    num_launchpads += 1
-                if launchpad.LaunchpadLPX().Check(3):
-                    lp = launchpad.LaunchpadLPX()
-                    if lp.Open(3): # second
-                        self.launchpads += [Launchpad(self, lp, "lpx", num_launchpads, self.options.octave_separation)]
-                        num_launchpads += 1
-        
-        if self.launchpads:
-            print('Launchpads:', len(self.launchpads))
+        self.launchpads = [
+            Launchpad(self, rs.device, rs.mode, index, rs.octave_separation)
+            for index, rs in enumerate(io.control_surfaces)
+        ]
 
         self.done = False
 
         for lp in self.launchpads:
             lp.set_lights()
 
-        # if self.launchpad:
-        #     # use the alternate colors
-        #     self.options.colors = get_option(opts, "colors", DEFAULT_OPTIONS.colors_alt)
-        #     self.options.colors = list(self.options.colors.split(","))
-        #     self.options.colors = list(map(lambda x: glm.ivec3(get_color(x)), self.options.colors))
-        
-        if not self.midi_out:
-            error(
-                "No MIDI output device detected.  Install a midi loopback device and name it 'midimech'!"
-            )
-
         self.dirty = True
         self.dirty_lights = True
         self.dirty_chord = False
-        # self.dirty_left_chord = False
 
         w = self.max_width
         h = self.board_h
@@ -1812,18 +1334,7 @@ class Core:
         self.mark_lights = [[False for x in range(w)] for y in range(h)]
         self.launchpad_state = [[None for x in range(8)] for y in range(8)]
 
-        self.font = pygame.font.Font(None, FONT_SZ)
-
-        # self.retro_font = pygame.font.Font("PressStart2P.ttf", FONT_SZ)
-        self.clock = pygame.time.Clock()
-
-        # if move_board:
-        #     self.move_board(move_board)
-
-        # self.setup_lights()
-
         self.setup_rpn()
-        # self.test()
 
     def midi_mode_rpn(self, on=True):
         if on:
@@ -2046,15 +1557,6 @@ class Core:
             y += 1
         self.dirty = True
 
-    def resize(self):
-        self.board_sz = ivec2(self.board_w, self.board_h)
-        self.screen_w = self.board_w * self.scale.x
-        self.screen_h = self.board_h * self.scale.y + self.menu_sz + self.status_sz
-        self.button_sz = self.screen_w / self.board_w
-        self.screen_sz = ivec2(self.screen_w, self.screen_h)
-        self.screen = Screen(self, pygame.display.set_mode(self.screen_sz))
-        self.dirty_lights = True
-
     def channel_from_split(self, col, row, force=False):
         if not force and not self.is_split():
             return 0
@@ -2088,235 +1590,30 @@ class Core:
         
         self.dirty = self.dirty_lights = True
 
-    def logic(self, dt):
-        # keys = pygame.key.get_pressed()
-
+    def poll_launchpads(self):
+        """Drain pending button/pressure events from each connected Launchpad."""
         for lp in self.launchpads:
-            # while True:
-            #     events = self.launchpad.EventRaw()
-            #     if events != []:
-            #         for ev in events:
-            #             self.cb_launchpad_in(ev[0], ev[1])
-            #     else:
-            #         break
             while True:
-                event = lp.out.ButtonStateXY(returnPressure = True)
+                event = lp.out.ButtonStateXY(returnPressure=True)
                 if event:
                     self.cb_launchpad_in(lp, event)
                 else:
                     break
-        
-        for ev in pygame.event.get():
-            if ev.type == pygame.QUIT:
-                self.quit()
-                break
-            elif ev.type == pygame.KEYDOWN:
-                if ev.key == pygame.K_ESCAPE:
-                    self.quit()
-                elif ev.key == pygame.K_F1:
-                    self.clear_marks(use_lights=True)
-                    self.send_all_notes_off()
-                else:
-                    try:
-                        n = self.keys[ev.key]
-                        n -= 12
-                        n += self.octave * 12
-                        self.mark(n + self.vis_octave * 12, 1, True)
-                        data = [0x90, n, 127]
-                        # TODO: add split for mouse?
-                        if self.midi_out:
-                            self.midi_write(self.midi_out, data, 0)
-                    except KeyError:
-                        pass
-            elif ev.type == pygame.KEYUP:
-                try:
-                    n = self.keys[ev.key]
-                    n -= 12
-                    n += self.octave * 12
-                    self.mark(n + self.vis_octave * 12, 0, True)
-                    data = [0x80, n, 0]
-                    if self.midi_out:
-                        # TODO: add split for mouse?
-                        self.midi_write(self.midi_out, data, 0)
-                except KeyError:
-                    pass
 
-            # else:
-                # if self.gamepad and ev.type in (\
-                #         pygame.JOYAXISMOTION,
-                #         pygame.JOYBALLMOTION,
-                #         pygame.JOYBUTTONDOWN,
-                #         pygame.JOYBUTTONUP,
-                #         pygame.JOYHATMOTION
-                #     ):
-                #         self.gamepad.event(ev)
-                
-            if not self.options.lite:
-                if ev.type == pygame.MOUSEMOTION:
-                    x, y = ev.pos
-                    y -= self.menu_sz
-                    self.mouse_hover(x, y)
-                elif ev.type == pygame.MOUSEBUTTONDOWN:
-                    x, y = ev.pos
-                    y -= self.menu_sz
-                    if ev.button == 1:
-                        self.mouse_press(x, y)
-                    elif ev.button == 2:
-                        self.mouse_release(x, y)
-                    elif ev.button == 3:
-                        self.mouse_hold(x, y)
-                elif ev.type == pygame.MOUSEBUTTONUP:
-                    self.mouse_release()
-                elif ev.type == pygame_gui.UI_BUTTON_PRESSED:
-                    if ev.ui_element == self.btn_octave_down:
-                        self.octave -= 1
-                        self.dirty = self.dirty_lights = True
-                        self.clear_marks(use_lights=False)
-                    elif ev.ui_element == self.btn_octave_up:
-                        self.octave += 1
-                        self.dirty = self.dirty_lights = True
-                        self.clear_marks(use_lights=False)
-                    elif ev.ui_element == self.btn_move_left:
-                        self.move_board(-1)
-                        self.clear_marks(use_lights=False)
-                    elif ev.ui_element == self.btn_move_right:
-                        self.move_board(1)
-                        self.clear_marks(use_lights=False)
-                    # elif ev.ui_element == self.btn_mode:
-                    #     # TODO: toggle mode
-                    #     self.dirty = True
-                    # elif ev.ui_element == self.btn_size:
-                    #     if self.board_w == 16:
-                    #         self.board_w = 25
-                    #         self.resize()
-                    #     else:
-                    #         self.board_w = 16
-                    #         self.resize()
-                    #     self.dirty = True
-                    elif ev.ui_element == self.btn_rotate:
-                        if self.rotated:
-                            self.position.x += 3
-                            self.rotated = False
-                        else:
-                            self.position.x -= 3
-                            self.rotated = True
-                        self.dirty = self.dirty_lights = True
-                        self.clear_marks(use_lights=False)
-                    elif ev.ui_element == self.btn_flip:
-                        self.flipped = not self.flipped
-                        self.dirty = self.dirty_lights = True
-                        self.clear_marks(use_lights=False)
-                    elif ev.ui_element == self.btn_split:
-                        if self.split_out:
-                            self.split_state = not self.split_state
-                            self.btn_split.set_text(
-                                "SPLIT: " + ("ON" if self.split_state else "OFF")
-                            )
-                            self.dirty = self.dirty_lights = True
-                        else:
-                            print("You need to add another MIDI loopback device called 'split'")
-                    elif ev.ui_element == self.btn_mpe:
-                        # self.split_state = not self.split_state
-                        self.options.one_channel = 0 if self.options.one_channel else 1
-                        # one_channel being non-zero means we're using MPE
-                        self.btn_mpe.set_text(
-                            "MPE: " + ("OFF" if self.options.one_channel else "ON")
-                        )
-                        self.midi_mode_rpn()
-                        self.dirty = True
-                    elif ev.ui_element == self.btn_transpose_down:
-                        self.set_tonic(self.tonic - 1)
-                    elif ev.ui_element == self.btn_transpose_up:
-                        self.set_tonic(self.tonic + 1)
-                    elif ev.ui_element == self.btn_next_scale:
-                        self.next_scale()
-                    elif ev.ui_element == self.btn_prev_scale:
-                        self.prev_scale()
-                    elif ev.ui_element == self.btn_next_mode:
-                        self.next_mode()
-                    elif ev.ui_element == self.btn_prev_mode:
-                        self.prev_mode()
-                # elif ev.type == pygame_gui.UI_HORIZONTAL_SLIDER_MOVED:
-                #     if ev.ui_element == self.slider_velocity:
-                #         global self.options.velocity_curve
-                #         self.options.velocity_curve = ev.value
-                #         self.config_save_timer = 1.0
-
-                self.gui.process_events(ev)
-        
+    def logic(self, dt):
         if self.launchpads:
             self.articulation.logic(dt)
-
-        # if self.gamepad:
-        #     self.gamepad.logic(dt)
-
-        # figure out the lowest note to highlight it
-        # if self.options.show_lowest_note:
-        #     old_lowest_note = self.lowest_note
-        #     old_lowest_note_midi = self.lowest_note_midi
-        #     self.lowest_note = None
-        #     self.lowest_note_midi = None
-        #     note_count = 0
-        #     for y, row in enumerate(self.board):
-        #         for x, cell in enumerate(row):
-        #             if cell:
-        #                 note_idx = self.get_note_index(x, y)
-        #                 note_num = note_idx + 12 * self.octaves[y][x]
-        #                 if (
-        #                     not self.lowest_note_midi
-        #                     or note_num < self.lowest_note_midi
-        #                 ):
-        #                     self.lowest_note = NOTES[note_idx]
-        #                     self.lowest_note_midi = note_num
-        #                 note_count += 1
-
-        # if self.dirty:
-        #     self.init_board()
 
         if self.dirty_lights:
             self.setup_lights()
             self.dirty_lights = False
 
-        # lowest note changed?
-        # if self.options.show_lowest_note:
-        #     if self.lowest_note != old_lowest_note:
-        #         if old_lowest_note:
-        #             # reset lights for previous lowest note
-        #             for y, row in enumerate(self.board):
-        #                 for x, cell in enumerate(row):
-        #                     if self.get_note(x, y) == old_lowest_note:
-        #                         self.reset_light(x, y)
-        #         if self.lowest_note:
-        #             # set lights for new lowest note
-        #             for y, row in enumerate(self.board):
-        #                 for x, cell in enumerate(row):
-        #                     if self.get_note(x, y) == self.lowest_note:
-        #                         self.set_light(x, y, 9)
-
-        # # if self.config_save_timer > 0.0:
-        # #     self.config_save_timer -= dt
-        # #     if self.config_save_timer <= 0.0:
-        # #         save()
-
         if not self.options.lite:
-            # for note in self.notes:
-            #     if note.location is None:
-            #         continue
-            #     note.logic(dt)
-
-            # chord analysis for jazz mod
-            # if self.options.jazz:
-            #     if self.dirty_chord:
-            #         self.left_chord = self.analyze(self.left_chord_notes)
-            
-            # chord analyzer
             if self.options.chord_analyzer:
                 if self.dirty_chord:
                     self.chord = self.analyze(self.chord_notes)
 
             self.dirty_chord = False
-        
-            self.gui.update(dt)
 
     def analyze(self, chord_notes):
         notes = []
@@ -2347,280 +1644,6 @@ class Core:
         if self.options.sustain_split == "both":
             return [self.midi_out, self.split_out]
         return [self.midi_out]
-
-    def render(self):
-        if not self.dirty:
-            return False
-
-        if self.options.lite:
-            self.screen.surface.blit(self.icon, (0,0,256,256))
-            return True
-        
-        self.dirty = False
-
-        self.screen.surface.fill((0, 0, 0))
-        b = 2  # border
-        sz = self.screen_w / self.board_w
-        y = 0
-        rad = int(sz // 2 - 8)
-
-        for row in self.board:
-            x = 0
-            for cell in row:
-                # write text
-                note = self.get_note(x, y, True)
-
-                split_chan = self.channel_from_split(x, y)
-
-                # note = str(self.get_octave(x, y)) # show octave
-                # brightness = 1.0 if cell else 0.5
-
-                col = None
-
-                # if cell:
-                #     col = ivec3(255,0,0)
-                # else:
-                #     col = self.get_color(x, y)
-                lit_col = ivec3(255, 0, 0)
-                unlit_col = copy.copy(self.get_color(x, y) or ivec3(0))
-                black = unlit_col == ivec3(0)
-                inner_col = copy.copy(unlit_col)
-                for i in range(len(unlit_col)):
-                    unlit_col[i] = min(255, unlit_col[i] * 1.5)
-
-                ry = y + self.menu_sz  # real y
-                # pygame.gfxdraw.box(self.screen.surface, [x*sz + b, self.menu_sz + y*sz + b, sz - b, sz - b], unlit_col)
-                rect = [x * sz + b, self.menu_sz + y * sz + b, sz - b, sz - b]
-                inner_rect = [rect[0] + 4, rect[1] + 4, rect[2] - 8, rect[3] - 8]
-                pygame.draw.rect(self.screen.surface, unlit_col, rect, border_radius=8)
-                pygame.draw.rect(
-                    self.screen.surface, inner_col, inner_rect, border_radius=8
-                )
-                if not black:
-                    pygame.draw.rect(
-                        self.screen.surface,
-                        BORDER_COLOR,
-                        rect,
-                        width=2,
-                        border_radius=8,
-                    )
-                else:
-                    pygame.draw.rect(
-                        self.screen.surface, vec3(24), rect, width=2, border_radius=8
-                    )
-                vis_cell = self.vis_board[y][x] if x < len(self.vis_board[y]) else 0
-
-                if cell or vis_cell:
-                    circ = ivec2(
-                        int(x * sz + b / 2 + sz / 2),
-                        int(self.menu_sz + y * sz + b / 2 + sz / 2),
-                    )
-                    if cell and vis_cell:  # Both are active (Purple)
-                        circle_col = ivec3(150, 0, 255)
-                        circle_inner_col = ivec3(100, 0, 200)
-                        shadow_col = ivec3(0, 0, 0)
-                    elif cell:  # Local input only (Red)
-                        circle_col = ivec3(255, 0, 0)
-                        circle_inner_col = ivec3(200, 0, 0)
-                        shadow_col = ivec3(0, 0, 0)
-                    elif vis_cell:  # Visualizer only (Blue)
-                        circle_col = ivec3(0, 100, 255)
-                        circle_inner_col = ivec3(0, 80, 200)
-                        shadow_col = ivec3(0, 0, 0)
-
-                    pygame.gfxdraw.aacircle(
-                        self.screen.surface,
-                        circ.x + 1,
-                        circ.y - 1,
-                        rad,
-                        circle_col,
-                    )
-                    pygame.gfxdraw.filled_circle(
-                        self.screen.surface,
-                        circ.x + 1,
-                        circ.y - 1,
-                        rad,
-                        circle_col,
-                    )
-
-                    pygame.gfxdraw.aacircle(
-                        self.screen.surface, circ.x - 1, circ.y + 1, rad, shadow_col
-                    )
-                    pygame.gfxdraw.filled_circle(
-                        self.screen.surface, circ.x - 1, circ.y + 1, rad, shadow_col
-                    )
-
-                    pygame.gfxdraw.filled_circle(
-                        self.screen.surface, circ.x, circ.y, rad, circle_col
-                    )
-                    pygame.gfxdraw.aacircle(
-                        self.screen.surface, circ.x, circ.y, rad, circle_col
-                    )
-
-                    pygame.gfxdraw.filled_circle(
-                        self.screen.surface,
-                        circ.x,
-                        circ.y,
-                        int(rad * 0.9),
-                        circle_inner_col,
-                    )
-                    pygame.gfxdraw.aacircle(
-                        self.screen.surface,
-                        circ.x,
-                        circ.y,
-                        int(rad * 0.9),
-                        circle_inner_col,
-                    )
-
-                text = self.font.render(note, True, (0, 0, 0))
-                textpos = text.get_rect()
-                textpos.x = x * sz + sz // 2 - FONT_SZ // 4
-                textpos.y = self.menu_sz + y * sz + sz // 2 - FONT_SZ // 4
-                textpos.x -= 1
-                textpos.y += 1
-                self.screen.surface.blit(text, textpos)
-
-                text = self.font.render(note, True, ivec3(255))
-                textpos = text.get_rect()
-                textpos.x = x * sz + sz // 2 - FONT_SZ // 4
-                textpos.y = self.menu_sz + y * sz + sz // 2 - FONT_SZ // 4
-                textpos.x += 1
-                textpos.y -= 1
-                self.screen.surface.blit(text, textpos)
-
-                text = self.font.render(note, True, ivec3(200))
-                textpos = text.get_rect()
-                textpos.x = x * sz + sz // 2 - FONT_SZ // 4
-                textpos.y = self.menu_sz + y * sz + sz // 2 - FONT_SZ // 4
-                self.screen.surface.blit(text, textpos)
-
-                x += 1
-            y += 1
-
-        # if self.gamepad:
-        #     pos = self.gamepad.positions()
-        #     # gp_pos.y = self.board_h - y - 1
-            
-        #     circ = [None] * 2
-        #     for i in range(2):
-        #         circ[i] = ivec2(
-        #             int(pos[i].x * sz + b / 2 + sz / 2),
-        #             int(self.menu_sz + pos[i].y * sz + b / 2 + sz / 2),
-        #         )
-                
-        #         pygame.gfxdraw.aacircle(
-        #             self.screen.surface,
-        #             circ[i].x + 1,
-        #             circ[i].y - 1,
-        #             rad,
-        #             ivec3(0, 255, 0),
-        #         )
-        #         # pygame.gfxdraw.filled_circle(
-        #         #     self.screen.surface,
-        #         #     circ[i].x + 1,
-        #         #     circ[i].y - 1,
-        #         #     rad,
-        #         #     ivec3(0, 255, 0),
-        #         # )
-
-        # if self.options.experimental:
-        text = self.font.render(self.scale_name, True, ivec3(127))
-        textpos = text.get_rect()
-        textpos.x = self.screen_w*1/4 - textpos[2]/2
-        textpos.y = self.screen_h - self.status_sz*3/4
-        self.screen.surface.blit(text, textpos)
-
-        text = self.font.render(self.mode_name, True, ivec3(127))
-        textpos = text.get_rect()
-        textpos.x = self.screen_w*2/4 - textpos[2]/2
-        textpos.y = self.screen_h - self.status_sz*3/4
-        self.screen.surface.blit(text, textpos)
-
-        chord = self.chord or '-'
-        text = self.font.render(chord, True, ivec3(127))
-        textpos = text.get_rect()
-        textpos.x = self.screen_w*3/4 - textpos[2]/2
-        textpos.y = self.screen_h - self.status_sz*3/4
-        self.screen.surface.blit(text, textpos)
-
-        # if CHORD_ANALYZER:
-        #     self.render_chords()
-
-    # def render_chords(self):
-    #     sz = self.screen_w / self.board_w
-    #     chords = set()
-    #     for y, row in enumerate(self.board):
-    #         ry = y + self.menu_sz # real y
-    #         for x, cell in enumerate(row):
-    #             # root_pos = ivec2(0,0)
-    #             for name, inversion_list in CHORD_SHAPES.items():
-    #                 for shape in inversion_list:
-    #                     next_chord = False
-    #                     polygons = []
-    #                     polygon = []
-    #                     root = None
-    #                     for rj, chord_row in enumerate(shape):
-    #                         for ri, ch in enumerate(chord_row):
-    #                             try:
-    #                                 mark = self.board[y+rj][x+ri]
-    #                             except:
-    #                                 polygon = []
-    #                                 next_chord = True
-    #                                 break
-    #                             # mark does not exist (not this chord)
-    #                             if ch=='x':
-    #                                 root = ivec2(x+ri, y+rj)
-    #                             if not mark and ch in 'ox':
-    #                                 next_chord=True # double break
-    #                                 polygon = []
-    #                                 break
-    #                             # polygon += [ivec2((x+ri)*sz, (y+rj)*sz+self.menu_sz)]
-    #                         if next_chord: # double break
-    #                             break
-    #                         # if polygon:
-    #                         #     polygons += [polygon]
-    #                     if not next_chord:
-    #                         # for poly in polygons:
-    #                         #     pygame.draw.polygon(self.screen.surface, ivec3(0,255,0), poly, 2)
-    #                         note = self.get_note_index(*root)
-    #                         chords.add((note, name))
-
-    # if chords:
-    #     name = ', '.join(NOTES[c[0]] + c[1] for c in chords) # concat names
-    #     text = self.font.render(name, True, ivec3(255))
-    #     textpos = text.get_rect()
-    #     textpos.x = 0
-    #     textpos.y = self.menu_sz // 2
-    #     self.screen.surface.blit(text, textpos)
-        return True
-
-    def draw(self):
-        self.gui.draw_ui(self.screen.surface)
-        self.screen.render()
-        pygame.display.flip()
-        # self.root.update_idletasks()
-        # self.root.update()
-
-    def __call__(self):
-        try:
-            self.done = False
-            while not self.done:
-                try:
-                    dt = self.clock.tick(self.options.fps) / 1000.0
-                except:
-                    self.deinit()
-                    break
-                self.logic(dt)
-                if self.done:
-                    break
-                self.render()
-                self.draw()
-        except:
-            print(traceback.format_exc())
-
-        self.deinit()
-
-        return 0
 
     def deinit(self):
         for lp in self.launchpads:

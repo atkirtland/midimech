@@ -1,10 +1,11 @@
 from src.device import Device, DeviceSettings
+from src.io_interfaces import ControlSurface
 import glm
 
 class Launchpad(Device):
-    def __init__(self, core, out, mode, index=0, octave_separation=0):
+    def __init__(self, core, out: ControlSurface, mode, index=0, octave_separation=0):
         super().__init__(core)
-        self.out = out
+        self.out: ControlSurface = out
         self.mode = mode
         self.index = index
         self.octave_separation = octave_separation
