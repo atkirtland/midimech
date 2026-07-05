@@ -1,6 +1,5 @@
-import os, sys, glm, copy, binascii, struct, math, traceback
+import os, sys, copy, binascii, struct, math, traceback
 from dataclasses import dataclass
-import glm
 from src.constants import *
 
 from collections import OrderedDict

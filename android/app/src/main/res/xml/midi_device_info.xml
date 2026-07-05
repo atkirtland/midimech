@@ -1,0 +1,5 @@
+<devices>
+    <device manufacturer="midimech" product="midimech" tags="virtual">
+        <output-port name="midimech_out" />
+    </device>
+</devices>

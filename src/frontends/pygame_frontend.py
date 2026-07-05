@@ -3,8 +3,8 @@ import os
 import sys
 import traceback
 
-import glm
-from glm import ivec2, ivec3, vec2, vec3
+from src import vecshim as glm
+from src.vecshim import ivec2, ivec3, vec2, vec3
 
 with open(os.devnull, "w") as devnull:
     # suppress pygame messages (to keep console output clean)

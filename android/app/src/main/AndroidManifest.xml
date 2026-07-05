@@ -1,0 +1,41 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-feature android:name="android.software.midi" android:required="true" />
+    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:theme="@style/Theme.Midimech"
+        android:pageSizeCompat="enabled">
+        <!-- Opts into Android 16's 4KB-page compatibility shim without showing the user a
+             warning dialog. Needed because Chaquopy 17.0's bundled OpenSSL/SQLite native
+             libraries (libssl_python.so etc.) aren't 16KB-page-aligned yet - see the
+             compileSdk comment in app/build.gradle.kts for the tracking issue. Remove this
+             once Chaquopy ships a fix. -->
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".MidimechVirtualMidiService"
+            android:exported="true"
+            android:permission="android.permission.BIND_MIDI_DEVICE_SERVICE">
+            <intent-filter>
+                <action android:name="android.media.midi.MidiDeviceService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.media.midi.MidiDeviceService"
+                android:resource="@xml/midi_device_info" />
+        </service>
+
+    </application>
+</manifest>

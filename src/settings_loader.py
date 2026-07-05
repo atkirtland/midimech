@@ -1,7 +1,8 @@
+import importlib.resources
 import sys
 from configparser import ConfigParser
 
-import glm
+from src import vecshim as glm
 
 from src.settings import Settings, DEFAULT_OPTIONS
 from src.util import error, get_color, get_option
@@ -13,8 +14,10 @@ except ImportError:
 
 
 def load_scale_db():
-    """Load scales.yaml. Duplicate-mode validation stays in Core (reuses Core.rotate_mode)."""
-    with open("scales.yaml", 'r') as stream:
+    """Load scales.yaml, bundled as package data under src/ so it's reachable the same way
+    whether src/ is a real directory (desktop) or packaged assets (Chaquopy/Android)."""
+    scales_file = importlib.resources.files("src").joinpath("scales.yaml")
+    with scales_file.open("r") as stream:
         try:
             scale_db = yaml.safe_load(stream)
         except yaml.YAMLError as exc:

@@ -1,9 +1,10 @@
 #!/usr/bin/python3
 # from tkinter import *
 from collections import OrderedDict
-import os, sys, glm, copy, binascii, struct, math, traceback, signal
+import os, sys, copy, binascii, struct, math, traceback, signal
 from dataclasses import dataclass
-from glm import ivec2, vec2, ivec3, vec3
+from src import vecshim as glm
+from src.vecshim import ivec2, vec2, ivec3, vec3
 import time
 
 from src.util import *
@@ -19,7 +20,9 @@ from typing import Optional
 try:
     import musicpy as mp
 except ImportError:
-    error("The project dependencies have changed! Run the requirements setup command again!")
+    # musicpy pulls in pygame transitively, which isn't available on every backend
+    # (e.g. Android/Chaquopy) - chord analysis is simply unavailable there.
+    mp = None
 
 class Core:
     CORE = None
@@ -499,9 +502,9 @@ class Core:
         for i, note in enumerate(self.notes):
             self.notes[i] = Note()
 
-        # These are midi numbers, not indices, so they only have to be 127
-        self.left_chord_notes = [False] * 127
-        self.chord_notes = [False] * 127
+        # Indexed directly by MIDI note number (0-127 inclusive), so need 128 slots.
+        self.left_chord_notes = [False] * 128
+        self.chord_notes = [False] * 128
         self.note_set = set()
         self.vis_board = [[0 for x in range(self.max_width)] for y in range(self.board_h)]
 
@@ -637,8 +640,12 @@ class Core:
         else:
             split_chan = 0
 
+        # extreme octave/transpose/position combinations can push this outside the valid
+        # MIDI note range; clamp rather than send an invalid byte (crashes some backends'
+        # raw MIDI write, e.g. Python's bytes() on a negative int).
+        midinote = clamp(0, 127, midinote)
         data[1] = midinote
-        
+
         if not aftertouch:
             self.mark(visual_midinote - 24, 1, only_row=row)
         # data[1] += self.out_octave * 12 + self.position.x * 2
@@ -813,8 +820,10 @@ class Core:
         else:
             split_chan = 0
 
+        # see note_on(): clamp rather than send an invalid MIDI note byte.
+        midinote = clamp(0, 127, midinote)
         data[1] = midinote
-        
+
         self.mark(visual_midinote - 24, 0, only_row=y)
         # data[1] += self.out_octave * 12 + self.position.x * 2
         # if self.flipped:
@@ -1231,6 +1240,9 @@ class Core:
         self.scale_db = scale_db
         self.split_point = options.split_point
         self.split_state = options.split
+
+        if mp is None:
+            self.options.chord_analyzer = False
 
         dups = {}
         scale_count = 0

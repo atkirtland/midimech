@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.Midimech" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/midimech_green</item>
+        <item name="colorPrimaryDark">@color/midimech_dark</item>
+        <item name="colorAccent">@color/midimech_green</item>
+    </style>
+</resources>

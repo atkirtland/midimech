@@ -6,3 +6,8 @@ midimech.spec
 build/
 dist/
 .idea/
+
+# Android
+.gradle/
+local.properties
+*.iml

@@ -1,6 +1,5 @@
 from src.device import Device, DeviceSettings
 from src.io_interfaces import ControlSurface
-import glm
 
 class Launchpad(Device):
     def __init__(self, core, out: ControlSurface, mode, index=0, octave_separation=0):

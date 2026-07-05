@@ -1,4 +1,4 @@
-from glm import ivec2, vec2, ivec3, vec3
+from src.vecshim import ivec2, vec2, ivec3, vec3
 
 TITLE = "midimech"
 # FOCUS = False
