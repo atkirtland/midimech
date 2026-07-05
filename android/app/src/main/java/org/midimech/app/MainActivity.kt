@@ -12,6 +12,7 @@ import android.widget.Button
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.chaquo.python.PyObject
 import com.chaquo.python.Python
@@ -20,6 +21,9 @@ import com.chaquo.python.android.AndroidPlatform
 class MainActivity : AppCompatActivity() {
     private lateinit var statusText: TextView
     private lateinit var soundfontText: TextView
+    private lateinit var instrumentText: TextView
+    private lateinit var paramsText: TextView
+    private var lastParamsString: String? = null
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var synth: Synth
     private var midiManager: MidiManager? = null
@@ -44,8 +48,11 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         statusText = findViewById(R.id.statusText)
         soundfontText = findViewById(R.id.soundfontText)
+        instrumentText = findViewById(R.id.instrumentText)
+        paramsText = findViewById(R.id.paramsText)
         wireControlButtons()
         wireSoundfontButtons()
+        wireInstrumentButton()
 
         if (!Python.isStarted()) {
             Python.start(AndroidPlatform(this))
@@ -53,6 +60,7 @@ class MainActivity : AppCompatActivity() {
         synth = Synth(this)
         synth.start()
         soundfontText.text = "Soundfont: ${synth.customSoundfontUri()?.lastPathSegment ?: "default"}"
+        instrumentText.text = "Instrument: ${GM_INSTRUMENT_NAMES[synth.currentInstrumentProgram()]}"
         statusText.text = "Waiting for Launchpad..."
 
         val mm = getSystemService(MIDI_SERVICE) as? MidiManager
@@ -90,6 +98,18 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.btnModeUp).setOnClickListener { core?.callAttr("next_mode") }
     }
 
+    private fun wireInstrumentButton() {
+        findViewById<Button>(R.id.btnInstrument).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Select Instrument")
+                .setItems(GM_INSTRUMENT_NAMES) { _, program ->
+                    synth.setInstrument(program)
+                    instrumentText.text = "Instrument: ${GM_INSTRUMENT_NAMES[program]}"
+                }
+                .show()
+        }
+    }
+
     private fun wireSoundfontButtons() {
         findViewById<Button>(R.id.btnLoadSoundfont).setOnClickListener {
             soundfontPicker.launch(arrayOf("*/*")) // .sf2 has no registered MIME type
@@ -98,6 +118,24 @@ class MainActivity : AppCompatActivity() {
             synth.setSoundfontUri(null)
             soundfontText.text = "Soundfont: default"
             Toast.makeText(this, "Default soundfont restored", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /** Refreshes the OCT/TR/SCL/MOD readout from Core - called every tick (not just after our
+     * own on-screen button taps) because the physical Launchpad has its own OCT/MOV/TRA/SCL/MOD
+     * buttons (src/launchpad.py's button()) that change this same state directly in Core,
+     * bypassing our UI entirely. Skips the setText() call when nothing changed, since this
+     * runs at tick rate (60Hz) and layout/invalidate on every frame would be wasteful. */
+    private fun updateParamsDisplay() {
+        val c = core ?: return
+        val octave = c.get("octave")?.toInt() ?: 0
+        val tonic = c.get("tonic")?.toInt() ?: 0
+        val scaleName = c.get("scale_name")?.toString() ?: "-"
+        val modeName = c.get("mode_name")?.toString() ?: "-"
+        val text = "OCT: $octave  TR: $tonic  SCL: $scaleName  MOD: $modeName"
+        if (text != lastParamsString) {
+            lastParamsString = text
+            paramsText.text = text
         }
     }
 
@@ -206,7 +244,17 @@ class MainActivity : AppCompatActivity() {
         val coreModule = py.getModule("src.core")
         core = coreModule.callAttr("Core", options, scaleDb, io)
 
-        runOnUiThread { statusText.text = "Launchpad connected" }
+        // Routes an external "notes to play" MIDI source (connected to our virtual
+        // "visualizer" input port) to Core.cb_visualizer() - see MidimechVirtualMidiService.
+        // onSend fires on a Binder thread, so hop onto the main thread before touching `core`.
+        MidimechVirtualMidiService.setVisualizerCallback { msg ->
+            handler.post { core?.callAttr("cb_visualizer", msg, 0L) }
+        }
+
+        runOnUiThread {
+            statusText.text = "Launchpad connected"
+            updateParamsDisplay()
+        }
         startTickLoop()
     }
 
@@ -219,6 +267,7 @@ class MainActivity : AppCompatActivity() {
                         it.callAttr("poll_launchpads")
                         it.callAttr("logic", intervalMs / 1000.0)
                     }
+                    updateParamsDisplay()
                 } catch (e: Exception) {
                     // A mid-flight disconnect can throw here before onDeviceRemoved fires;
                     // that callback (or onDestroy) does the real cleanup, so we still just skip
@@ -240,6 +289,7 @@ class MainActivity : AppCompatActivity() {
     private fun teardownLaunchpad() {
         tickRunnable?.let { handler.removeCallbacks(it) }
         tickRunnable = null
+        MidimechVirtualMidiService.setVisualizerCallback(null)
         try {
             core?.callAttr("deinit")
         } catch (e: Exception) {
@@ -251,7 +301,11 @@ class MainActivity : AppCompatActivity() {
         }
         launchpadDevice = null
         connectedDeviceId = null
-        runOnUiThread { statusText.text = "Waiting for Launchpad..." }
+        lastParamsString = null
+        runOnUiThread {
+            statusText.text = "Waiting for Launchpad..."
+            paramsText.text = "OCT: 0  TR: 0  SCL: -  MOD: -"
+        }
     }
 
     override fun onDestroy() {

@@ -81,6 +81,8 @@ class Synth(private val context: Context) {
             handle = TsfEngine.nativeLoad(loadSoundfontBytes(), sampleRate)
             if (handle == 0L) {
                 android.util.Log.e("MIDIMECH", "TsfEngine.nativeLoad failed - no soundfont loaded")
+            } else {
+                applyInstrumentToAllChannelsLocked(currentInstrumentProgram())
             }
         }
 
@@ -138,6 +140,30 @@ class Synth(private val context: Context) {
                 TsfEngine.nativeClose(handle)
             }
             handle = newHandle
+            // A freshly loaded soundfont resets every channel back to program 0 - reapply
+            // whatever instrument was previously selected so switching soundfonts doesn't
+            // silently revert it.
+            applyInstrumentToAllChannelsLocked(currentInstrumentProgram())
+        }
+    }
+
+    /** The currently-selected General MIDI program (0-127), persisted across restarts. */
+    fun currentInstrumentProgram(): Int = prefs.getInt(KEY_INSTRUMENT_PROGRAM, 0)
+
+    /** Switches instrument by sending a Program Change on every channel (0-15). Core can route
+     * notes to different channels depending on split/MPE settings (see channel_from_split in
+     * src/core.py), so applying it to all of them - rather than guessing which one(s) Core is
+     * currently using - is what actually makes "switch instrument" behave as the user expects
+     * regardless of mode. */
+    fun setInstrument(program: Int) {
+        prefs.edit().putInt(KEY_INSTRUMENT_PROGRAM, program).apply()
+        synchronized(lock) { applyInstrumentToAllChannelsLocked(program) }
+    }
+
+    private fun applyInstrumentToAllChannelsLocked(program: Int) {
+        if (handle == 0L) return
+        for (channel in 0 until 16) {
+            TsfEngine.nativeProgramChange(handle, channel, program)
         }
     }
 
@@ -198,5 +224,6 @@ class Synth(private val context: Context) {
 
     companion object {
         private const val KEY_SOUNDFONT_URI = "custom_soundfont_uri"
+        private const val KEY_INSTRUMENT_PROGRAM = "instrument_program"
     }
 }

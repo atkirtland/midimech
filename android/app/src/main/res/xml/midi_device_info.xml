@@ -1,5 +1,10 @@
 <devices>
     <device manufacturer="midimech" product="midimech" tags="virtual">
         <output-port name="midimech_out" />
+        <!-- Send a "notes to play" MIDI stream here (e.g. from a web-based Synthesia-style
+             player using the Web MIDI API in Chrome, or any MIDI file player/DAW app that can
+             pick a MIDI output device) to light the Launchpad's visualizer marks, mirroring
+             desktop's "visualizer" loopback MIDI-in port. See Core.cb_visualizer(). -->
+        <input-port name="visualizer" />
     </device>
 </devices>

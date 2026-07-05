@@ -11,3 +11,6 @@ dist/
 .gradle/
 local.properties
 *.iml
+.cxx/
+.externalNativeBuild/
+*.apk
